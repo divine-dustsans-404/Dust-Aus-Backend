@@ -1,4 +1,4 @@
-// --- DUSTTALE BACKEND (Phiên bản nâng cấp MONGO) ---
+// --- DUSTTALE BACKEND (Phiên bản nâng cấp MONGO + DELETE) ---
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -20,12 +20,9 @@ app.use(morgan("tiny"));
 app.use(express.json());
 
 // --- BƯỚC 1: LẤY CHUỖI KẾT NỐI BÍ MẬT ---
-// Chúng ta sẽ lấy chuỗi kết nối từ Biến Môi trường (Environment Variable) trên Render
-// Nó an toàn hơn là dán trực tiếp vào code
 const DB_CONNECTION_STRING = process.env.DATABASE_URI;
 
 // --- BƯỚC 2: TẠO "KHUÔN MẪU" CHO DỮ LIỆU (SCHEMA) ---
-// Định nghĩa xem một "AU" sẽ trông như thế nào trong cơ sở dữ liệu
 const auSchema = new mongoose.Schema({
   name: String,
   author: String,
@@ -34,8 +31,6 @@ const auSchema = new mongoose.Schema({
   created: { type: Date, default: Date.now }
 });
 
-// Tạo một "Model" (Mô hình) từ Schema.
-// Đây là công cụ chính để chúng ta tìm, tạo, xóa AUs.
 const AuModel = mongoose.model("AU", auSchema);
 
 // --- BƯỚC 3: KẾT NỐI VỚI CƠ SỞ DỮ LIỆU ---
@@ -50,11 +45,10 @@ mongoose.connect(DB_CONNECTION_STRING)
 
 // --- BƯỚC 4: CẬP NHẬT CÁC ROUTE (API) ---
 
-// Route 1: Lấy danh sách tất cả AU
+// Route 1: Lấy danh sách tất cả AU (Giữ nguyên)
 app.get("/aus", async (req, res) => {
   try {
-    // Thay vì đọc tệp, chúng ta dùng Model để TÌM TẤT CẢ
-    const aus = await AuModel.find({}).sort({ created: -1 }); // Sắp xếp mới nhất lên đầu
+    const aus = await AuModel.find({}).sort({ created: -1 });
     res.json(aus);
   } catch (err) {
     console.error("Lỗi khi lấy AUs:", err);
@@ -62,7 +56,7 @@ app.get("/aus", async (req, res) => {
   }
 });
 
-// Route 2: Gửi (POST) một AU mới
+// Route 2: Gửi (POST) một AU mới (Giữ nguyên)
 app.post("/aus", async (req, res) => {
   const { name, author, desc, link } = req.body;
   
@@ -71,23 +65,59 @@ app.post("/aus", async (req, res) => {
   }
 
   try {
-    // Tạo một AU mới bằng cách dùng "Khuôn mẫu"
     const newAU = new AuModel({
       name: name,
       author: author,
       desc: desc,
-      link: link || "" // Lưu là chuỗi rỗng nếu không có link
+      link: link || ""
     });
 
-    // Thay vì ghi tệp, chúng ta LƯU (SAVE) nó vào cơ sở dữ liệu
     const savedAU = await newAU.save();
-    
     res.status(201).json({ message: "Đã lưu AU thành công!", au: savedAU });
   } catch (err) {
     console.error("Lỗi khi lưu AU:", err);
     res.status(500).json({ message: "Lỗi máy chủ khi đang cố lưu dữ liệu." });
   }
 });
+
+// --- (THÊM MỚI) ROUTE 4: XÓA (DELETE) MỘT AU ---
+// :id là một biến, nó sẽ là ID của AU cần xóa
+app.delete("/aus/:id", async (req, res) => {
+  // 1. Lấy "chìa khóa" mà người dùng gửi
+  // (Chúng ta sẽ gửi nó trong một thứ gọi là "header")
+  const token = req.headers['authorization'];
+  
+  // 2. Lấy "chìa khóa" bí mật lưu trên Render
+  const SECRET_TOKEN = process.env.ADMIN_TOKEN;
+
+  // 3. Kiểm tra chìa khóa
+  if (!token || token !== SECRET_TOKEN) {
+    // Nếu không có chìa khóa, hoặc chìa khóa sai -> CẤM!
+    return res.status(403).json({ message: "Không có quyền! Sai mật khẩu Admin." });
+  }
+
+  // 4. Nếu chìa khóa đúng -> Tiến hành xóa
+  try {
+    const auId = req.params.id; // Lấy ID từ đường dẫn (URL)
+    
+    // Tìm AU bằng ID và xóa nó
+    const deletedAU = await AuModel.findByIdAndDelete(auId);
+
+    if (!deletedAU) {
+      // Nếu không tìm thấy AU có ID đó
+      return res.status(404).json({ message: "Không tìm thấy AU để xóa." });
+    }
+
+    // Gửi thông báo thành công
+    res.status(200).json({ message: "Đã xóa AU thành công!", au: deletedAU });
+
+  } catch (err) {
+    console.error("Lỗi khi xóa AU:", err);
+    res.status(500).json({ message: "Lỗi máy chủ khi đang cố xóa." });
+  }
+});
+// --- KẾT THÚC THÊM MỚI ---
+
 
 // Route 3: Route gốc (Giữ nguyên)
 app.get("/", (req, res) => {
