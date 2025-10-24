@@ -1,86 +1,97 @@
-// --- DUSTTALE BACKEND (one-file edition) ---
+// --- DUSTTALE BACKEND (Phiên bản nâng cấp MONGO) ---
 import express from "express";
-import fs from "fs";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import mongoose from "mongoose"; // <-- CÔNG CỤ MỚI
 
-const app = express();
-// Render.com sẽ tự động cung cấp cổng qua 'process.env.PORT'
-const PORT = process.env.PORT || 8080;
-const DATA_FILE = "aus.json";
-
-// --- SỬA LỖI CORS BẮT ĐẦU ---
-
-// Địa chỉ trang web Production (nơi trang web của bạn đang chạy)
-// Lưu ý: Nó phải bao gồm cả tên kho lưu trữ /My-Aus-Wiki/
+// --- SỬA LỖI CORS (Giữ nguyên) ---
 const PROD_ORIGIN = "https://divine-dustsans-404.github.io";
-
-// Địa chỉ trang web Development (khi bạn chạy thử trên máy)
 const DEV_ORIGIN = "http://localhost:2435";
-
-// Danh sách các địa chỉ được phép gửi yêu cầu
-// Chúng ta sẽ cho phép cả hai
 const ALLOWED_ORIGINS = [PROD_ORIGIN, DEV_ORIGIN, "https://divine-dustsans-404.github.io/My-Aus-Wiki"];
 
+// --- CÀI ĐẶT MÁY CHỦ ---
+const app = express();
+const PORT = process.env.PORT || 8080;
+
 app.use(cors({ origin: ALLOWED_ORIGINS }));
-
-// --- SỬA LỖI CORS KẾT THÚC ---
-
 app.use(helmet());
 app.use(morgan("tiny"));
-app.use(express.json()); // Cho phép máy chủ đọc JSON từ req.body
+app.use(express.json());
 
-// Đọc dữ liệu có sẵn từ tệp
-let aus = [];
-try {
-  if (fs.existsSync(DATA_FILE)) {
-    aus = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-  }
-} catch (err) {
-  console.error("Không thể đọc tệp aus.json:", err);
-}
+// --- BƯỚC 1: LẤY CHUỖI KẾT NỐI BÍ MẬT ---
+// Chúng ta sẽ lấy chuỗi kết nối từ Biến Môi trường (Environment Variable) trên Render
+// Nó an toàn hơn là dán trực tiếp vào code
+const DB_CONNECTION_STRING = process.env.DATABASE_URI;
+
+// --- BƯỚC 2: TẠO "KHUÔN MẪU" CHO DỮ LIỆU (SCHEMA) ---
+// Định nghĩa xem một "AU" sẽ trông như thế nào trong cơ sở dữ liệu
+const auSchema = new mongoose.Schema({
+  name: String,
+  author: String,
+  desc: String,
+  link: String,
+  created: { type: Date, default: Date.now }
+});
+
+// Tạo một "Model" (Mô hình) từ Schema.
+// Đây là công cụ chính để chúng ta tìm, tạo, xóa AUs.
+const AuModel = mongoose.model("AU", auSchema);
+
+// --- BƯỚC 3: KẾT NỐI VỚI CƠ SỞ DỮ LIỆU ---
+mongoose.connect(DB_CONNECTION_STRING)
+  .then(() => {
+    console.log("Đã kết nối thành công với MongoDB!");
+  })
+  .catch((err) => {
+    console.error("LỖI KẾT NỐI MONGODB:", err);
+    process.exit(1); // Thoát nếu không kết nối được
+  });
+
+// --- BƯỚC 4: CẬP NHẬT CÁC ROUTE (API) ---
 
 // Route 1: Lấy danh sách tất cả AU
-app.get("/aus", (req, res) => {
-  res.json(aus);
+app.get("/aus", async (req, res) => {
+  try {
+    // Thay vì đọc tệp, chúng ta dùng Model để TÌM TẤT CẢ
+    const aus = await AuModel.find({}).sort({ created: -1 }); // Sắp xếp mới nhất lên đầu
+    res.json(aus);
+  } catch (err) {
+    console.error("Lỗi khi lấy AUs:", err);
+    res.status(500).json({ message: "Lỗi máy chủ khi lấy dữ liệu." });
+  }
 });
 
 // Route 2: Gửi (POST) một AU mới
-app.post("/aus", (req, res) => {
+app.post("/aus", async (req, res) => {
   const { name, author, desc, link } = req.body;
   
-  // Kiểm tra dữ liệu đầu vào
   if (!name || !author || !desc) {
     return res.status(400).json({ message: "Thiếu dữ liệu Tên AU, Tác giả, hoặc Mô tả." });
   }
 
-  const newAU = {
-    id: Date.now(),
-    name,
-    author,
-    desc,
-    link: link || "Không có",
-    created: new Date().toISOString()
-  };
-
-  aus.push(newAU);
-  
-  // Lưu vào tệp
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(aus, null, 2));
-    res.status(201).json({ message: "Đã lưu AU thành công!", au: newAU });
+    // Tạo một AU mới bằng cách dùng "Khuôn mẫu"
+    const newAU = new AuModel({
+      name: name,
+      author: author,
+      desc: desc,
+      link: link || "" // Lưu là chuỗi rỗng nếu không có link
+    });
+
+    // Thay vì ghi tệp, chúng ta LƯU (SAVE) nó vào cơ sở dữ liệu
+    const savedAU = await newAU.save();
+    
+    res.status(201).json({ message: "Đã lưu AU thành công!", au: savedAU });
   } catch (err) {
-    console.error("Không thể ghi tệp aus.json:", err);
-    res.status(500).json({ message: "Lỗi máy chủ khi đang cố lưu tệp." });
+    console.error("Lỗi khi lưu AU:", err);
+    res.status(500).json({ message: "Lỗi máy chủ khi đang cố lưu dữ liệu." });
   }
 });
 
-// Route 3: Route gốc (Dùng để kiểm tra xem máy chủ có chạy không)
-// Đây là route khắc phục lỗi "Not Found" trong ảnh 161.jpg
+// Route 3: Route gốc (Giữ nguyên)
 app.get("/", (req, res) => {
-  res.send(`<h2>DUSTTALE Backend đang chạy.</h2>
-  <p>Gửi POST đến /aus để thêm AU mới.</p>`);
+  res.send(`<h2>DUSTTALE Backend (Phiên bản MongoDB) đang chạy.</h2>`);
 });
 
 // Khởi động máy chủ
